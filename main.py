@@ -40,4 +40,3 @@ def fetch_article(url: str) -> str:
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")
-    # print(fetch_article("https://www.lesswrong.com/posts/5yFj7C6NNc8GPdfNo/subskills-of-listening-to-wisdom"))
