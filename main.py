@@ -5,6 +5,7 @@ from newsplease import NewsPlease
 
 mcp = FastMCP("article")
 
+
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, datetime):
@@ -16,7 +17,7 @@ class DateTimeEncoder(json.JSONEncoder):
 def fetch_article(url: str) -> str:
     """
     Fetch and parse a news article from a given URL
-    
+
     Args:
         url (str): The URL of the article to fetch
     Returns:
@@ -25,17 +26,34 @@ def fetch_article(url: str) -> str:
     try:
         article = NewsPlease.from_url(url)
         article_dict = article.get_dict()
-        
+
         # Get main text content and title
-        text = article_dict.get('maintext', '')
-        title = article_dict.get('title', '')
-        
+        text = article_dict.get("maintext", "")
+        title = article_dict.get("title", "")
+
         # Combine title and text
         full_text = f"{title}\n\n{text}"
-        
+
         return full_text
     except Exception as e:
         return f"Error fetching article: {str(e)}"
+
+
+@mcp.tool()
+def fetch_urls(urls: list) -> list:
+    """
+    Fetch and parse news articles from a list of URLs
+
+    Args:
+        urls (list): List of URLs to fetch
+    Returns:
+        list: List of article texts
+    """
+    articles = []
+    for url in urls:
+        article = fetch_article(url)
+        articles.append(article + "\n\n" + "-" * 50 + "\n\n")
+    return articles
 
 
 if __name__ == "__main__":
