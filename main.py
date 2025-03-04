@@ -6,13 +6,77 @@ import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from typing import List, Dict, Optional, Tuple, Set
+from typing import List, Dict, Optional, Tuple, Set, Pattern
+from dataclasses import dataclass, field
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
 from newsplease import NewsPlease
 from newsplease.crawler.simple_crawler import SimpleCrawler
 import requests
 import urllib.parse
+
+
+# Configuration classes
+@dataclass
+class TimeoutConfig:
+    """Timeout configuration settings"""
+
+    CONNECT_TIMEOUT: int = 5  # seconds for initial connection
+    READ_TIMEOUT: int = 30  # seconds for reading response
+    NEWSPLEASE_TIMEOUT: int = 20  # seconds for NewsPlease parsing
+    TOTAL_REQUEST_TIMEOUT: int = 30  # maximum time for entire request
+
+
+@dataclass
+class RetryConfig:
+    """Retry configuration settings"""
+
+    MAX_RETRIES: int = 2
+    BACKOFF_FACTOR: float = 0.3
+    MAX_WORKERS: int = 10  # for ThreadPoolExecutor
+
+
+@dataclass
+class HTTPConfig:
+    """HTTP request configuration"""
+
+    USER_AGENT: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    )
+    CHUNK_SIZE: int = 8192
+    ALLOW_REDIRECTS: bool = True
+
+
+@dataclass
+class ParsingConfig:
+    """HTML parsing configuration"""
+
+    UNNECESSARY_TAGS: List[str] = field(
+        default_factory=lambda: [
+            "script",
+            "style",
+            "iframe",
+            "nav",
+            "footer",
+            "header",
+            "meta",
+            "link",
+        ]
+    )
+    UNWANTED_ATTRIBUTES: List[str] = field(
+        default_factory=lambda: ["style", "class", "id"]
+    )
+    AD_PATTERN: str = (
+        r"(ad|advertisement|banner|popup|modal|cookie|subscribe|newsletter)"
+    )
+    ARTICLE_PATTERN: str = r"article|post|content|story"
+
+
+# Global Configuration
+TIMEOUT = TimeoutConfig()
+RETRY = RetryConfig()
+HTTP = HTTPConfig()
+PARSING = ParsingConfig()
 
 # Configure logging
 logging.basicConfig(
@@ -42,17 +106,11 @@ def clean_html(html: str) -> str:
         soup = BeautifulSoup(html, "html.parser")
 
         # Remove unnecessary tags
-        for tag in soup.find_all(
-            ["script", "style", "iframe", "nav", "footer", "header", "meta", "link"]
-        ):
+        for tag in soup.find_all(PARSING.UNNECESSARY_TAGS):
             tag.decompose()
 
         # Remove common ad-related elements
-        for element in soup.find_all(
-            class_=re.compile(
-                r"(ad|advertisement|banner|popup|modal|cookie|subscribe|newsletter)"
-            )
-        ):
+        for element in soup.find_all(class_=re.compile(PARSING.AD_PATTERN)):
             element.decompose()
 
         # Remove empty elements
@@ -60,17 +118,17 @@ def clean_html(html: str) -> str:
             if len(element.get_text(strip=True)) == 0:
                 element.decompose()
 
-        # Remove all style attributes
+        # Remove unwanted attributes
         for tag in soup.find_all(True):
             tag.attrs = {
                 key: value
                 for key, value in tag.attrs.items()
-                if key not in ["style", "class", "id"]
+                if key not in PARSING.UNWANTED_ATTRIBUTES
             }
 
         return str(soup)
     except Exception as e:
-        print(f"Error cleaning HTML: {str(e)}")
+        logger.error(f"Error cleaning HTML: {str(e)}")
         return html
 
 
@@ -103,13 +161,11 @@ def extract_article_content(html: str) -> Dict[str, str]:
         # Try to find article content
         content = ""
         main_content = soup.find("article") or soup.find(
-            class_=re.compile(r"article|post|content|story")
+            class_=re.compile(PARSING.ARTICLE_PATTERN)
         )
         if main_content:
             # Remove unwanted elements
-            for tag in main_content.find_all(
-                ["script", "style", "nav", "header", "footer"]
-            ):
+            for tag in main_content.find_all(PARSING.UNNECESSARY_TAGS):
                 tag.decompose()
             content = main_content.get_text(separator="\n", strip=True)
         else:
@@ -181,10 +237,10 @@ def log_elapsed_time(func):
 @log_elapsed_time
 def fetch_html(
     url: str,
-    total_timeout: int = 30,
-    connect_timeout: int = 5,
-    retries: int = 2,
-    backoff_factor: float = 0.3,
+    total_timeout: int = TIMEOUT.TOTAL_REQUEST_TIMEOUT,
+    connect_timeout: int = TIMEOUT.CONNECT_TIMEOUT,
+    retries: int = RETRY.MAX_RETRIES,
+    backoff_factor: float = RETRY.BACKOFF_FACTOR,
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Fetch HTML content from URL with strict timeout control.
@@ -198,9 +254,7 @@ def fetch_html(
     Returns:
         Tuple[Optional[str], Optional[str]]: Tuple of (raw HTML, error message if any)
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
+    headers = {"User-Agent": HTTP.USER_AGENT}
 
     # Create session for connection pooling
     with requests.Session() as session:
@@ -216,7 +270,7 @@ def fetch_html(
                     url,
                     timeout=(connect_timeout, total_timeout),
                     stream=True,
-                    allow_redirects=True,
+                    allow_redirects=HTTP.ALLOW_REDIRECTS,
                 ) as response:
                     response.raise_for_status()
                     content = []
@@ -227,7 +281,7 @@ def fetch_html(
 
                     # Read the content in chunks with total timeout enforcement
                     for chunk in response.iter_content(
-                        chunk_size=8192, decode_unicode=True
+                        chunk_size=HTTP.CHUNK_SIZE, decode_unicode=True
                     ):
                         current_time = time.time()
                         elapsed = current_time - start_time
@@ -276,13 +330,6 @@ def fetch_html(
             if attempt < retries:
                 sleep_time = backoff_factor * (2**attempt)
                 time.sleep(sleep_time)
-
-
-class DateTimeEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        return super().default(obj)
 
 
 def extract_links(html: str, base_url: str) -> Set[str]:
@@ -351,13 +398,7 @@ def fetch_single_article(url: str) -> Dict[str, str]:
     try:
         logger.info(f"Fetching article from URL: {url}")
         # First attempt: Fetch raw HTML with improved timeout handling
-        raw_html, error = fetch_html(
-            url,
-            total_timeout=30,  # Maximum total time for request
-            connect_timeout=5,  # Time for initial connection
-            retries=2,
-            backoff_factor=0.3,
-        )
+        raw_html, error = fetch_html(url)
         if error:
             logger.error(f"Failed to fetch HTML: {error}")
             result["content"] = error
@@ -371,9 +412,11 @@ def fetch_single_article(url: str) -> Dict[str, str]:
 
         # First parsing attempt: Use NewsPlease
         try:
-            logger.info("Attempting to parse with NewsPlease (timeout: 20s)")
+            logger.info(
+                f"Attempting to parse with NewsPlease (timeout: {TIMEOUT.NEWSPLEASE_TIMEOUT}s)"
+            )
 
-            @timeout_decorator(20)
+            @timeout_decorator(TIMEOUT.NEWSPLEASE_TIMEOUT)
             def parse_with_newsplease(url):
                 return NewsPlease.from_url(url)
 
@@ -399,7 +442,9 @@ def fetch_single_article(url: str) -> Dict[str, str]:
                     )
                     return result
         except TimeoutError as te:
-            logger.error("NewsPlease parsing timed out after 20 seconds")
+            logger.error(
+                f"NewsPlease parsing timed out after {TIMEOUT.NEWSPLEASE_TIMEOUT} seconds"
+            )
             logger.info("Falling back to custom extractor")
         except Exception as np_error:
             logger.error(f"NewsPlease parsing failed: {str(np_error)}")
@@ -411,13 +456,7 @@ def fetch_single_article(url: str) -> Dict[str, str]:
             extracted = extract_article_content(cleaned_html)
             if extracted["status"] == "success":
                 logger.info("Successfully parsed article with custom extractor")
-                result.update(
-                    {
-                        "title": extracted["title"],
-                        "content": extracted["content"],
-                        "status": "success",
-                    }
-                )
+                result.update(extracted)
                 return result
 
         # If we got here with no content, update error message
@@ -455,9 +494,7 @@ def fetch_articles(urls: List[str]) -> List[Dict[str, str]]:
     Returns:
         List[Dict[str, str]]: List of article information dictionaries
     """
-    # Use ThreadPoolExecutor for parallel processing
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        # Map URLs to fetch_single_article function
+    with ThreadPoolExecutor(max_workers=RETRY.MAX_WORKERS) as executor:
         results = list(executor.map(fetch_single_article, urls))
     return results
 
@@ -500,7 +537,9 @@ def fetch_recursive(
     ]  # Limit links to prevent excessive crawling
 
     # Fetch articles from extracted links
-    with ThreadPoolExecutor(max_workers=min(10, len(links_to_crawl))) as executor:
+    with ThreadPoolExecutor(
+        max_workers=min(RETRY.MAX_WORKERS, len(links_to_crawl))
+    ) as executor:
         link_results = list(executor.map(fetch_single_article, links_to_crawl))
 
     # Add non-error results
@@ -509,6 +548,15 @@ def fetch_recursive(
             results.append(article)
 
     return results[:max_articles]
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    """JSON encoder for datetime objects"""
+
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 
 if __name__ == "__main__":
