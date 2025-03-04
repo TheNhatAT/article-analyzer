@@ -560,6 +560,4 @@ class DateTimeEncoder(json.JSONEncoder):
 
 
 if __name__ == "__main__":
-    # mcp.run(transport="stdio")
-
-    print(fetch_recursive("https://huyenchip.com/blog", depth=1, max_articles=5))
+    mcp.run(transport="stdio")
