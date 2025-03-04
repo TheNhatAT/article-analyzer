@@ -1,7 +1,11 @@
 import json
 import re
+import time
+import logging
+import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from typing import List, Dict, Optional, Tuple, Set
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
@@ -9,6 +13,14 @@ from newsplease import NewsPlease
 from newsplease.crawler.simple_crawler import SimpleCrawler
 import requests
 import urllib.parse
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 mcp = FastMCP("article")
 
@@ -62,21 +74,208 @@ def clean_html(html: str) -> str:
         return html
 
 
-def fetch_html(url: str) -> Tuple[Optional[str], Optional[str]]:
+def extract_article_content(html: str) -> Dict[str, str]:
     """
-    Fetch HTML content from URL separately.
+    Extract article content from HTML using BeautifulSoup as fallback.
+
+    Args:
+        html (str): Raw HTML content
+    Returns:
+        Dict[str, str]: Extracted article information
+    """
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Try to find article title
+        title = None
+        title_candidates = [
+            soup.find("meta", property="og:title"),
+            soup.find("meta", property="twitter:title"),
+            soup.find("h1"),
+            soup.find("title"),
+        ]
+        for candidate in title_candidates:
+            if candidate:
+                title = candidate.get("content", candidate.text)
+                if title:
+                    break
+
+        # Try to find article content
+        content = ""
+        main_content = soup.find("article") or soup.find(
+            class_=re.compile(r"article|post|content|story")
+        )
+        if main_content:
+            # Remove unwanted elements
+            for tag in main_content.find_all(
+                ["script", "style", "nav", "header", "footer"]
+            ):
+                tag.decompose()
+            content = main_content.get_text(separator="\n", strip=True)
+        else:
+            # Fallback to largest text block
+            paragraphs = soup.find_all("p")
+            if paragraphs:
+                content = "\n".join(p.get_text(strip=True) for p in paragraphs)
+
+        return {
+            "title": title or "Untitled",
+            "content": content,
+            "status": "success" if content else "error",
+        }
+    except Exception as e:
+        return {"title": "Error", "content": str(e), "status": "error"}
+
+
+def timeout_decorator(timeout):
+    """Decorator to add timeout to a function"""
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            result = [None]
+            error = [None]
+
+            def target():
+                try:
+                    result[0] = func(*args, **kwargs)
+                except Exception as e:
+                    error[0] = e
+
+            thread = threading.Thread(target=target)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout)
+
+            if thread.is_alive():
+                logger.error(
+                    f"Function {func.__name__} timed out after {timeout} seconds"
+                )
+                thread.join(0)  # Don't wait for thread
+                raise TimeoutError(f"Function timed out after {timeout} seconds")
+
+            if error[0] is not None:
+                raise error[0]
+
+            return result[0]
+
+        return wrapper
+
+    return decorator
+
+
+def log_elapsed_time(func):
+    """Decorator to log function execution time"""
+
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        logger.info(f"Starting {func.__name__}")
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        logger.info(f"Completed {func.__name__} in {end_time - start_time:.2f} seconds")
+        return result
+
+    return wrapper
+
+
+@log_elapsed_time
+def fetch_html(
+    url: str,
+    total_timeout: int = 30,
+    connect_timeout: int = 5,
+    retries: int = 2,
+    backoff_factor: float = 0.3,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Fetch HTML content from URL with strict timeout control.
 
     Args:
         url (str): URL to fetch
+        total_timeout (int): Maximum total time allowed for request in seconds
+        connect_timeout (int): Timeout for initial connection in seconds
+        retries (int): Number of retry attempts
+        backoff_factor (float): Backoff factor between retries
     Returns:
         Tuple[Optional[str], Optional[str]]: Tuple of (raw HTML, error message if any)
     """
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        return response.text, None
-    except requests.RequestException as e:
-        return None, f"Failed to fetch HTML: {str(e)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+
+    # Create session for connection pooling
+    with requests.Session() as session:
+        session.headers.update(headers)
+
+        for attempt in range(retries + 1):
+            try:
+                logger.info(
+                    f"Attempting to fetch URL: {url} (Attempt {attempt + 1}/{retries + 1})"
+                )
+                # Use streaming to monitor download time
+                with session.get(
+                    url,
+                    timeout=(connect_timeout, total_timeout),
+                    stream=True,
+                    allow_redirects=True,
+                ) as response:
+                    response.raise_for_status()
+                    content = []
+
+                    total_chunks = 0
+                    total_size = 0
+                    start_time = time.time()
+
+                    # Read the content in chunks with total timeout enforcement
+                    for chunk in response.iter_content(
+                        chunk_size=8192, decode_unicode=True
+                    ):
+                        current_time = time.time()
+                        elapsed = current_time - start_time
+                        if elapsed > total_timeout:
+                            logger.warning(
+                                f"Request exceeded timeout limit of {total_timeout}s (elapsed: {elapsed:.2f}s)"
+                            )
+                            return (
+                                None,
+                                f"Total request time exceeded {total_timeout} seconds",
+                            )
+                        if chunk:
+                            content.append(chunk)
+                            total_chunks += 1
+                            total_size += len(chunk)
+                            if total_chunks % 10 == 0:  # Log every 10 chunks
+                                logger.debug(
+                                    f"Downloaded {total_size/1024:.1f}KB in {total_chunks} chunks. Elapsed: {elapsed:.2f}s"
+                                )
+
+                    return "".join(content), None
+
+            except requests.ConnectTimeout:
+                if attempt == retries:
+                    logger.error("Connection timed out after all retries")
+                    return None, "Connection timed out"
+                logger.warning(
+                    f"Connection timeout on attempt {attempt + 1}, retrying..."
+                )
+
+            except requests.ReadTimeout:
+                if attempt == retries:
+                    logger.error("Read timed out after all retries")
+                    return None, "Read timed out"
+                logger.warning(f"Read timeout on attempt {attempt + 1}, retrying...")
+
+            except requests.RequestException as e:
+                if attempt == retries:
+                    logger.error(f"Request failed after all retries: {str(e)}")
+                    return None, f"Failed to fetch HTML: {str(e)}"
+                logger.warning(
+                    f"Request failed on attempt {attempt + 1}: {str(e)}, retrying..."
+                )
+
+            # Exponential backoff between retries
+            if attempt < retries:
+                sleep_time = backoff_factor * (2**attempt)
+                time.sleep(sleep_time)
 
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -128,56 +327,109 @@ def extract_links(html: str, base_url: str) -> Set[str]:
         return set()
 
 
+@log_elapsed_time
 def fetch_single_article(url: str) -> Dict[str, str]:
     """
-    Fetch and parse a single news article using news-please
+    Fetch and parse a single news article with multiple fallback approaches.
 
     Args:
         url (str): URL of the article to fetch
     Returns:
         Dict[str, str]: Article information including parsed content and raw HTML
     """
+    # Initialize empty result with default values
+    result = {
+        "title": "Error",
+        "content": "",
+        "authors": "Unknown",
+        "published_date": "Unknown",
+        "origin": url,
+        "status": "error",
+        "html": "",
+    }
+
     try:
-        # Fetch raw HTML first
-        raw_html, error = fetch_html(url)
+        logger.info(f"Fetching article from URL: {url}")
+        # First attempt: Fetch raw HTML with improved timeout handling
+        raw_html, error = fetch_html(
+            url,
+            total_timeout=30,  # Maximum total time for request
+            connect_timeout=5,  # Time for initial connection
+            retries=2,
+            backoff_factor=0.3,
+        )
         if error:
-            raise Exception(error)
+            logger.error(f"Failed to fetch HTML: {error}")
+            result["content"] = error
+            return result
 
-        # Parse article using NewsPlease
-        article = NewsPlease.from_url(url)
-        if not article:
-            raise Exception("Failed to parse article")
+        logger.info("Successfully fetched HTML content")
 
-        article_dict = article.get_dict()
-
-        # Clean and process HTML
+        # Clean HTML content
         cleaned_html = clean_html(raw_html)
+        result["html"] = cleaned_html
 
-        # Get article components
-        title = article_dict.get("title", "").strip()
-        text = article_dict.get("maintext", "").strip()
-        authors = article_dict.get("authors", [])
-        date = article_dict.get("date_publish", "")
+        # First parsing attempt: Use NewsPlease
+        try:
+            logger.info("Attempting to parse with NewsPlease (timeout: 20s)")
 
-        return {
-            "title": title or "Untitled",
-            "content": text,
-            "authors": ", ".join(authors) if authors else "Unknown",
-            "published_date": date.isoformat() if date else "Unknown",
-            "origin": url,
-            "status": "success",
-            "html": cleaned_html,
-        }
+            @timeout_decorator(20)
+            def parse_with_newsplease(url):
+                return NewsPlease.from_url(url)
+
+            article = parse_with_newsplease(url)
+            if article:
+                article_dict = article.get_dict()
+
+                # Update result with NewsPlease data
+                if article_dict.get("title"):
+                    logger.info("Successfully parsed article with NewsPlease")
+                    result.update(
+                        {
+                            "title": article_dict.get("title", "").strip()
+                            or "Untitled",
+                            "content": article_dict.get("maintext", "").strip(),
+                            "authors": ", ".join(article_dict.get("authors", []))
+                            or "Unknown",
+                            "published_date": article_dict.get(
+                                "date_publish", "Unknown"
+                            ),
+                            "status": "success",
+                        }
+                    )
+                    return result
+        except TimeoutError as te:
+            logger.error("NewsPlease parsing timed out after 20 seconds")
+            logger.info("Falling back to custom extractor")
+        except Exception as np_error:
+            logger.error(f"NewsPlease parsing failed: {str(np_error)}")
+            logger.info("Falling back to custom extractor")
+
+        # Second parsing attempt: Use custom extractor
+        if cleaned_html:
+            logger.info("Attempting to parse with custom extractor")
+            extracted = extract_article_content(cleaned_html)
+            if extracted["status"] == "success":
+                logger.info("Successfully parsed article with custom extractor")
+                result.update(
+                    {
+                        "title": extracted["title"],
+                        "content": extracted["content"],
+                        "status": "success",
+                    }
+                )
+                return result
+
+        # If we got here with no content, update error message
+        if not result["content"]:
+            logger.error("Failed to extract content with both parsing methods")
+            result["content"] = "Failed to extract article content"
+
+        return result
+
     except Exception as e:
-        return {
-            "title": "Error",
-            "content": f"Error fetching article: {str(e)}",
-            "authors": "N/A",
-            "published_date": "N/A",
-            "origin": url,
-            "status": "error",
-            "html": "",
-        }
+        result["content"] = f"Error fetching article: {str(e)}"
+        return result
 
 
 @mcp.tool()
@@ -257,51 +509,6 @@ def fetch_recursive(
             results.append(article)
 
     return results[:max_articles]
-
-
-@mcp.tool()
-def fetch_sitemap_articles(url: str, max_articles: int = 10) -> List[Dict[str, str]]:
-    """
-    Fetch articles from a website's sitemap.
-
-    Args:
-        url (str): The website URL to fetch articles from
-        max_articles (int): Maximum number of articles to fetch (default: 10)
-    Returns:
-        List[Dict[str, str]]: List of article information dictionaries
-    """
-    try:
-        # Use SimpleCrawler for sitemap-based crawling
-        articles = SimpleCrawler.fetch_urls(
-            urls=[url],
-            overwrite_existing_files=True,
-            sitemap_crawler=True,
-            number_of_articles=max_articles,
-        )
-
-        results = []
-        for article_url, article in articles.items():
-            if article:
-                article_dict = article.get_dict()
-                results.append(
-                    {
-                        "title": article_dict.get("title", "").strip() or "Untitled",
-                        "content": article_dict.get("maintext", "").strip(),
-                        "authors": ", ".join(article_dict.get("authors", []))
-                        or "Unknown",
-                        "published_date": article_dict.get("date_publish", "Unknown"),
-                        "origin": article_url,
-                        "status": "success",
-                    }
-                )
-
-                # Limit to max_articles
-                if len(results) >= max_articles:
-                    break
-
-        return results
-    except Exception as e:
-        return [{"error": f"Error fetching sitemap articles: {str(e)}"}]
 
 
 if __name__ == "__main__":
