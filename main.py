@@ -28,6 +28,7 @@ def fetch_single_article(url: str) -> Dict[str, str]:
         text = article_dict.get("maintext", "")
         authors = article_dict.get("authors", [])
         date = article_dict.get("date_publish", "")
+        html = article_dict.get("html", "")
 
         return {
             "title": title,
@@ -36,6 +37,7 @@ def fetch_single_article(url: str) -> Dict[str, str]:
             "published_date": date.isoformat() if date else "Unknown",
             "origin": url,
             "status": "success",
+            "html": html,
         }
     except Exception as e:
         return {
@@ -45,6 +47,7 @@ def fetch_single_article(url: str) -> Dict[str, str]:
             "published_date": "N/A",
             "origin": url,
             "status": "error",
+            "html": "",
         }
 
 
