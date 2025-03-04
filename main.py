@@ -22,9 +22,9 @@ class TimeoutConfig:
     """Timeout configuration settings"""
 
     CONNECT_TIMEOUT: int = 5  # seconds for initial connection
-    READ_TIMEOUT: int = 30  # seconds for reading response
-    NEWSPLEASE_TIMEOUT: int = 20  # seconds for NewsPlease parsing
-    TOTAL_REQUEST_TIMEOUT: int = 30  # maximum time for entire request
+    READ_TIMEOUT: int = 10  # seconds for reading response
+    NEWSPLEASE_TIMEOUT: int = 10  # seconds for NewsPlease parsing
+    TOTAL_REQUEST_TIMEOUT: int = 15  # maximum time for entire request
 
 
 @dataclass
@@ -560,4 +560,6 @@ class DateTimeEncoder(json.JSONEncoder):
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    # mcp.run(transport="stdio")
+
+    print(fetch_recursive("https://huyenchip.com/blog", depth=1, max_articles=5))
