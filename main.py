@@ -617,51 +617,51 @@ class DateTimeEncoder(json.JSONEncoder):
 
 
 if __name__ == "__main__":
-    # mcp.run(transport="stdio")
+    mcp.run(transport="stdio")
 
     # run fetch_articles with multiple urls:
-    print(
-        fetch_articles(
-            [
-                "https://huyenchip.com/2025/01/16/ai-engineering-pitfalls.html",
-                "https://huyenchip.com/2025/01/07/agents.html",
-                "https://huyenchip.com/2024/07/25/genai-platform.html",
-                "https://huyenchip.com/2024/04/17/personal-growth.html",
-                "https://huyenchip.com/2024/03/14/ai-oss.html",
-                "https://huyenchip.com/2024/02/28/predictive-human-preference.html",
-                "https://huyenchip.com/2024/01/16/sampling.html",
-                "https://huyenchip.com/2023/10/10/multimodal.html",
-                "https://huyenchip.com/2023/08/16/llm-research-open-challenges.html",
-                "https://huyenchip.com/2023/06/07/generative-ai-strategy.html",
-                "https://huyenchip.com/2023/05/02/rlhf.html",
-                "https://huyenchip.com/2023/04/11/llm-engineering.html",
-                "https://huyenchip.com/2023/01/24/what-we-look-for-in-a-candidate.html",
-                "https://huyenchip.com/2023/01/08/self-serve-feature-platforms.html",
-                "https://huyenchip.com/2022/12/27/books-for-every-engineer.html",
-                "https://huyenchip.com/2022/08/03/stream-processing-for-data-scientists.html",
-                "https://huyenchip.com/2022/02/07/data-distribution-shifts-and-monitoring.html",
-                "https://huyenchip.com/2022/01/02/real-time-machine-learning-challenges-and-solutions.html",
-                "https://huyenchip.com/2021/09/13/data-science-infrastructure.html",
-                "https://huyenchip.com/2021/09/07/a-friendly-introduction-to-machine-learning-compilers-and-optimizers.html",
-                "https://huyenchip.com/2021/02/27/why-not-join-a-startup.html",
-                "https://huyenchip.com/2020/12/30/mlops-v2.html",
-                "https://huyenchip.com/2020/12/27/real-time-machine-learning.html",
-                "https://huyenchip.com/2020/10/27/ml-systems-design-stanford.html",
-                "https://huyenchip.com/2020/06/22/mlops.html",
-                "https://huyenchip.com/2020/01/18/tech-workers-19k-compensation-details.html",
-                "https://huyenchip.com/2019/12/28/books-that-shaped-my-decade.html",
-                "https://huyenchip.com/2019/12/23/leaving-nvidia-lessons.html",
-                "https://huyenchip.com/2019/12/18/key-trends-neurips-2019.html",
-                "https://huyenchip.com/2019/08/21/glassdoor-interview-reviews-tech-hiring-cultures.html",
-                "https://huyenchip.com/2019/08/05/free-online-machine-learning-curriculum.html",
-                "https://huyenchip.com/2019/07/21/machine-learning-interviews.html",
-                "https://huyenchip.com/2019/05/12/top-8-trends-from-iclr-2019.html",
-                "https://huyenchip.com/2019/03/11/silicon-valley-misogyny.html",
-                "https://huyenchip.com/2018/11/16/building-meaningful-relationships.html",
-                "https://huyenchip.com/2018/10/08/career-advice-recent-cs-graduates.html",
-                "https://huyenchip.com/2018/10/04/sotawhat.html",
-                "https://huyenchip.com/2018/03/30/guide-to-Artificial-Intelligence-Stanford.html",
-                "https://huyenchip.com/2017/07/28/confession.html",
-            ]
-        )
-    )
+    # print(
+    #     fetch_articles(
+    #         [
+    #             "https://huyenchip.com/2025/01/16/ai-engineering-pitfalls.html",
+    #             "https://huyenchip.com/2025/01/07/agents.html",
+    #             "https://huyenchip.com/2024/07/25/genai-platform.html",
+    #             "https://huyenchip.com/2024/04/17/personal-growth.html",
+    #             "https://huyenchip.com/2024/03/14/ai-oss.html",
+    #             "https://huyenchip.com/2024/02/28/predictive-human-preference.html",
+    #             "https://huyenchip.com/2024/01/16/sampling.html",
+    #             "https://huyenchip.com/2023/10/10/multimodal.html",
+    #             "https://huyenchip.com/2023/08/16/llm-research-open-challenges.html",
+    #             "https://huyenchip.com/2023/06/07/generative-ai-strategy.html",
+    #             "https://huyenchip.com/2023/05/02/rlhf.html",
+    #             "https://huyenchip.com/2023/04/11/llm-engineering.html",
+    #             "https://huyenchip.com/2023/01/24/what-we-look-for-in-a-candidate.html",
+    #             "https://huyenchip.com/2023/01/08/self-serve-feature-platforms.html",
+    #             "https://huyenchip.com/2022/12/27/books-for-every-engineer.html",
+    #             "https://huyenchip.com/2022/08/03/stream-processing-for-data-scientists.html",
+    #             "https://huyenchip.com/2022/02/07/data-distribution-shifts-and-monitoring.html",
+    #             "https://huyenchip.com/2022/01/02/real-time-machine-learning-challenges-and-solutions.html",
+    #             "https://huyenchip.com/2021/09/13/data-science-infrastructure.html",
+    #             "https://huyenchip.com/2021/09/07/a-friendly-introduction-to-machine-learning-compilers-and-optimizers.html",
+    #             "https://huyenchip.com/2021/02/27/why-not-join-a-startup.html",
+    #             "https://huyenchip.com/2020/12/30/mlops-v2.html",
+    #             "https://huyenchip.com/2020/12/27/real-time-machine-learning.html",
+    #             "https://huyenchip.com/2020/10/27/ml-systems-design-stanford.html",
+    #             "https://huyenchip.com/2020/06/22/mlops.html",
+    #             "https://huyenchip.com/2020/01/18/tech-workers-19k-compensation-details.html",
+    #             "https://huyenchip.com/2019/12/28/books-that-shaped-my-decade.html",
+    #             "https://huyenchip.com/2019/12/23/leaving-nvidia-lessons.html",
+    #             "https://huyenchip.com/2019/12/18/key-trends-neurips-2019.html",
+    #             "https://huyenchip.com/2019/08/21/glassdoor-interview-reviews-tech-hiring-cultures.html",
+    #             "https://huyenchip.com/2019/08/05/free-online-machine-learning-curriculum.html",
+    #             "https://huyenchip.com/2019/07/21/machine-learning-interviews.html",
+    #             "https://huyenchip.com/2019/05/12/top-8-trends-from-iclr-2019.html",
+    #             "https://huyenchip.com/2019/03/11/silicon-valley-misogyny.html",
+    #             "https://huyenchip.com/2018/11/16/building-meaningful-relationships.html",
+    #             "https://huyenchip.com/2018/10/08/career-advice-recent-cs-graduates.html",
+    #             "https://huyenchip.com/2018/10/04/sotawhat.html",
+    #             "https://huyenchip.com/2018/03/30/guide-to-Artificial-Intelligence-Stanford.html",
+    #             "https://huyenchip.com/2017/07/28/confession.html",
+    #         ]
+    #     )
+    # )
