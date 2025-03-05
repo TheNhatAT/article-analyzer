@@ -16,41 +16,33 @@ import requests
 import urllib.parse
 
 
-# Configuration classes
 @dataclass
-class TimeoutConfig:
-    """Timeout configuration settings"""
+class ApplicationConfig:
+    """Application-wide configuration settings"""
 
+    # Timeout settings
     CONNECT_TIMEOUT: int = 5  # seconds for initial connection
     READ_TIMEOUT: int = 10  # seconds for reading response
     NEWSPLEASE_TIMEOUT: int = 10  # seconds for NewsPlease parsing
     TOTAL_REQUEST_TIMEOUT: int = 15  # maximum time for entire request
 
-
-@dataclass
-class RetryConfig:
-    """Retry configuration settings"""
-
+    # Retry settings
     MAX_RETRIES: int = 2
     BACKOFF_FACTOR: float = 0.3
     MAX_WORKERS: int = 10  # for ThreadPoolExecutor
 
-
-@dataclass
-class HTTPConfig:
-    """HTTP request configuration"""
-
+    # HTTP settings
     USER_AGENT: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     )
     CHUNK_SIZE: int = 8192
     ALLOW_REDIRECTS: bool = True
 
+    # Batch settings
+    ARTICLES_BATCH_SIZE: int = 10  # Default batch size for fetch_articles
+    RECURSIVE_BATCH_SIZE: int = 10  # Default batch size for fetch_recursive
 
-@dataclass
-class ParsingConfig:
-    """HTML parsing configuration"""
-
+    # Parsing settings
     UNNECESSARY_TAGS: List[str] = field(
         default_factory=lambda: [
             "script",
@@ -73,10 +65,7 @@ class ParsingConfig:
 
 
 # Global Configuration
-TIMEOUT = TimeoutConfig()
-RETRY = RetryConfig()
-HTTP = HTTPConfig()
-PARSING = ParsingConfig()
+CONFIG = ApplicationConfig()
 
 # Configure logging
 logging.basicConfig(
@@ -106,11 +95,11 @@ def clean_html(html: str) -> str:
         soup = BeautifulSoup(html, "html.parser")
 
         # Remove unnecessary tags
-        for tag in soup.find_all(PARSING.UNNECESSARY_TAGS):
+        for tag in soup.find_all(CONFIG.UNNECESSARY_TAGS):
             tag.decompose()
 
         # Remove common ad-related elements
-        for element in soup.find_all(class_=re.compile(PARSING.AD_PATTERN)):
+        for element in soup.find_all(class_=re.compile(CONFIG.AD_PATTERN)):
             element.decompose()
 
         # Remove empty elements
@@ -123,7 +112,7 @@ def clean_html(html: str) -> str:
             tag.attrs = {
                 key: value
                 for key, value in tag.attrs.items()
-                if key not in PARSING.UNWANTED_ATTRIBUTES
+                if key not in CONFIG.UNWANTED_ATTRIBUTES
             }
 
         return str(soup)
@@ -161,11 +150,11 @@ def extract_article_content(html: str) -> Dict[str, str]:
         # Try to find article content
         content = ""
         main_content = soup.find("article") or soup.find(
-            class_=re.compile(PARSING.ARTICLE_PATTERN)
+            class_=re.compile(CONFIG.ARTICLE_PATTERN)
         )
         if main_content:
             # Remove unwanted elements
-            for tag in main_content.find_all(PARSING.UNNECESSARY_TAGS):
+            for tag in main_content.find_all(CONFIG.UNNECESSARY_TAGS):
                 tag.decompose()
             content = main_content.get_text(separator="\n", strip=True)
         else:
@@ -237,10 +226,10 @@ def log_elapsed_time(func):
 @log_elapsed_time
 def fetch_html(
     url: str,
-    total_timeout: int = TIMEOUT.TOTAL_REQUEST_TIMEOUT,
-    connect_timeout: int = TIMEOUT.CONNECT_TIMEOUT,
-    retries: int = RETRY.MAX_RETRIES,
-    backoff_factor: float = RETRY.BACKOFF_FACTOR,
+    total_timeout: int = CONFIG.TOTAL_REQUEST_TIMEOUT,
+    connect_timeout: int = CONFIG.CONNECT_TIMEOUT,
+    retries: int = CONFIG.MAX_RETRIES,
+    backoff_factor: float = CONFIG.BACKOFF_FACTOR,
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Fetch HTML content from URL with strict timeout control.
@@ -254,7 +243,7 @@ def fetch_html(
     Returns:
         Tuple[Optional[str], Optional[str]]: Tuple of (raw HTML, error message if any)
     """
-    headers = {"User-Agent": HTTP.USER_AGENT}
+    headers = {"User-Agent": CONFIG.USER_AGENT}
 
     # Create session for connection pooling
     with requests.Session() as session:
@@ -270,7 +259,7 @@ def fetch_html(
                     url,
                     timeout=(connect_timeout, total_timeout),
                     stream=True,
-                    allow_redirects=HTTP.ALLOW_REDIRECTS,
+                    allow_redirects=CONFIG.ALLOW_REDIRECTS,
                 ) as response:
                     response.raise_for_status()
                     content = []
@@ -281,7 +270,7 @@ def fetch_html(
 
                     # Read the content in chunks with total timeout enforcement
                     for chunk in response.iter_content(
-                        chunk_size=HTTP.CHUNK_SIZE, decode_unicode=True
+                        chunk_size=CONFIG.CHUNK_SIZE, decode_unicode=True
                     ):
                         current_time = time.time()
                         elapsed = current_time - start_time
@@ -413,10 +402,10 @@ def fetch_single_article(url: str) -> Dict[str, str]:
         # First parsing attempt: Use NewsPlease
         try:
             logger.info(
-                f"Attempting to parse with NewsPlease (timeout: {TIMEOUT.NEWSPLEASE_TIMEOUT}s)"
+                f"Attempting to parse with NewsPlease (timeout: {CONFIG.NEWSPLEASE_TIMEOUT}s)"
             )
 
-            @timeout_decorator(TIMEOUT.NEWSPLEASE_TIMEOUT)
+            @timeout_decorator(CONFIG.NEWSPLEASE_TIMEOUT)
             def parse_with_newsplease(url):
                 return NewsPlease.from_url(url)
 
@@ -443,7 +432,7 @@ def fetch_single_article(url: str) -> Dict[str, str]:
                     return result
         except TimeoutError as te:
             logger.error(
-                f"NewsPlease parsing timed out after {TIMEOUT.NEWSPLEASE_TIMEOUT} seconds"
+                f"NewsPlease parsing timed out after {CONFIG.NEWSPLEASE_TIMEOUT} seconds"
             )
             logger.info("Falling back to custom extractor")
         except Exception as np_error:
@@ -485,67 +474,135 @@ def fetch_article(url: str) -> Dict[str, str]:
 
 
 @mcp.tool()
-def fetch_articles(urls: List[str]) -> List[Dict[str, str]]:
+def fetch_articles(
+    urls: List[str], batch_size: int = CONFIG.ARTICLES_BATCH_SIZE
+) -> List[Dict[str, str]]:
     """
-    Fetch and parse multiple news articles in parallel using ThreadPoolExecutor
+    Fetch and parse multiple news articles in parallel using ThreadPoolExecutor with batching
 
     Args:
         urls (List[str]): List of URLs to fetch
+        batch_size (int): Number of articles to process in parallel per batch (default: 5)
     Returns:
         List[Dict[str, str]]: List of article information dictionaries
     """
-    with ThreadPoolExecutor(max_workers=RETRY.MAX_WORKERS) as executor:
-        results = list(executor.map(fetch_single_article, urls))
+    results = []
+    total_urls = len(urls)
+    processed = 0
+
+    # Process URLs in batches to prevent memory overload
+    for i in range(0, total_urls, batch_size):
+        batch = urls[i : min(i + batch_size, total_urls)]
+
+        with ThreadPoolExecutor(
+            max_workers=min(CONFIG.MAX_WORKERS, len(batch))
+        ) as executor:
+            futures = {executor.submit(fetch_single_article, url): url for url in batch}
+
+            for future in futures:
+                try:
+                    result = future.result(timeout=CONFIG.TOTAL_REQUEST_TIMEOUT)
+                    results.append(result)
+                    processed += 1
+                    logger.info(
+                        f"Processed {processed}/{total_urls} articles ({(processed/total_urls)*100:.1f}%)"
+                    )
+                except Exception as e:
+                    url = futures[future]
+                    logger.error(f"Error processing {url}: {str(e)}")
+                    results.append(
+                        {
+                            "title": "Error",
+                            "content": f"Failed to fetch: {str(e)}",
+                            "origin": url,
+                            "status": "error",
+                        }
+                    )
+                    processed += 1
+
     return results
 
 
 @mcp.tool()
 def fetch_recursive(
-    url: str, depth: int = 1, max_articles: int = 5
+    url: str,
+    depth: int = 1,
+    max_articles: int = 5,
+    batch_size: int = CONFIG.RECURSIVE_BATCH_SIZE,
 ) -> List[Dict[str, str]]:
     """
-    Recursively fetch articles from a website up to specified depth.
+    Recursively fetch articles from a website up to specified depth with parallel processing.
 
     Args:
         url (str): The starting URL to fetch
         depth (int): How many levels deep to crawl (default: 1)
         max_articles (int): Maximum number of articles to fetch (default: 5)
+        batch_size (int): Number of articles to process in parallel per batch (default: 3)
     Returns:
         List[Dict[str, str]]: List of article information dictionaries
     """
     if depth < 1 or max_articles < 1:
         return [{"error": "Depth and max_articles must be greater than 0"}]
 
-    # First, fetch the main article
-    main_article = fetch_single_article(url)
-    results = [main_article]
+    visited_urls = set()
+    results = []
+    urls_to_process = [(url, 0)]  # (url, current_depth)
 
-    # If we don't need to go deeper, return early
-    if depth == 1 or len(results) >= max_articles:
-        return results[:max_articles]
+    while urls_to_process and len(results) < max_articles:
+        current_batch = []
+        batch_depths = []
 
-    # Extract links from the main article HTML
-    raw_html, _ = fetch_html(url)
-    if not raw_html:
-        return results[:max_articles]
+        # Create batch of URLs to process
+        while urls_to_process and len(current_batch) < batch_size:
+            current_url, current_depth = urls_to_process.pop(0)
+            if current_url not in visited_urls:
+                current_batch.append(current_url)
+                batch_depths.append(current_depth)
+                visited_urls.add(current_url)
 
-    cleaned_html = clean_html(raw_html)
+        if not current_batch:
+            break
 
-    links = extract_links(cleaned_html, url)
-    links_to_crawl = list(links)[
-        :max_articles
-    ]  # Limit links to prevent excessive crawling
+        # Process current batch in parallel
+        with ThreadPoolExecutor(
+            max_workers=min(CONFIG.MAX_WORKERS, len(current_batch))
+        ) as executor:
+            futures = {
+                executor.submit(fetch_single_article, url): (url, depth)
+                for url, depth in zip(current_batch, batch_depths)
+            }
 
-    # Fetch articles from extracted links
-    with ThreadPoolExecutor(
-        max_workers=min(RETRY.MAX_WORKERS, len(links_to_crawl))
-    ) as executor:
-        link_results = list(executor.map(fetch_single_article, links_to_crawl))
+            for future in futures:
+                try:
+                    article = future.result(timeout=CONFIG.TOTAL_REQUEST_TIMEOUT)
+                    url, current_depth = futures[future]
 
-    # Add non-error results
-    for article in link_results:
-        if article["status"] == "success" and len(results) < max_articles:
-            results.append(article)
+                    if article["status"] == "success":
+                        results.append(article)
+                        logger.info(
+                            f"Fetched article {len(results)}/{max_articles} from depth {current_depth}"
+                        )
+
+                        # If we can go deeper, extract and add links to process
+                        if current_depth < depth - 1:
+                            raw_html, _ = fetch_html(url)
+                            if raw_html:
+                                cleaned_html = clean_html(raw_html)
+                                new_links = extract_links(cleaned_html, url)
+
+                                # Add new links with incremented depth
+                                for link in new_links:
+                                    if link not in visited_urls:
+                                        urls_to_process.append(
+                                            (link, current_depth + 1)
+                                        )
+
+                except Exception as e:
+                    url, _ = futures[future]
+                    logger.error(f"Error processing {url}: {str(e)}")
+
+                if len(results) >= max_articles:
+                    break
 
     return results[:max_articles]
 
@@ -560,4 +617,51 @@ class DateTimeEncoder(json.JSONEncoder):
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    # mcp.run(transport="stdio")
+
+    # run fetch_articles with multiple urls:
+    print(
+        fetch_articles(
+            [
+                "https://huyenchip.com/2025/01/16/ai-engineering-pitfalls.html",
+                "https://huyenchip.com/2025/01/07/agents.html",
+                "https://huyenchip.com/2024/07/25/genai-platform.html",
+                "https://huyenchip.com/2024/04/17/personal-growth.html",
+                "https://huyenchip.com/2024/03/14/ai-oss.html",
+                "https://huyenchip.com/2024/02/28/predictive-human-preference.html",
+                "https://huyenchip.com/2024/01/16/sampling.html",
+                "https://huyenchip.com/2023/10/10/multimodal.html",
+                "https://huyenchip.com/2023/08/16/llm-research-open-challenges.html",
+                "https://huyenchip.com/2023/06/07/generative-ai-strategy.html",
+                "https://huyenchip.com/2023/05/02/rlhf.html",
+                "https://huyenchip.com/2023/04/11/llm-engineering.html",
+                "https://huyenchip.com/2023/01/24/what-we-look-for-in-a-candidate.html",
+                "https://huyenchip.com/2023/01/08/self-serve-feature-platforms.html",
+                "https://huyenchip.com/2022/12/27/books-for-every-engineer.html",
+                "https://huyenchip.com/2022/08/03/stream-processing-for-data-scientists.html",
+                "https://huyenchip.com/2022/02/07/data-distribution-shifts-and-monitoring.html",
+                "https://huyenchip.com/2022/01/02/real-time-machine-learning-challenges-and-solutions.html",
+                "https://huyenchip.com/2021/09/13/data-science-infrastructure.html",
+                "https://huyenchip.com/2021/09/07/a-friendly-introduction-to-machine-learning-compilers-and-optimizers.html",
+                "https://huyenchip.com/2021/02/27/why-not-join-a-startup.html",
+                "https://huyenchip.com/2020/12/30/mlops-v2.html",
+                "https://huyenchip.com/2020/12/27/real-time-machine-learning.html",
+                "https://huyenchip.com/2020/10/27/ml-systems-design-stanford.html",
+                "https://huyenchip.com/2020/06/22/mlops.html",
+                "https://huyenchip.com/2020/01/18/tech-workers-19k-compensation-details.html",
+                "https://huyenchip.com/2019/12/28/books-that-shaped-my-decade.html",
+                "https://huyenchip.com/2019/12/23/leaving-nvidia-lessons.html",
+                "https://huyenchip.com/2019/12/18/key-trends-neurips-2019.html",
+                "https://huyenchip.com/2019/08/21/glassdoor-interview-reviews-tech-hiring-cultures.html",
+                "https://huyenchip.com/2019/08/05/free-online-machine-learning-curriculum.html",
+                "https://huyenchip.com/2019/07/21/machine-learning-interviews.html",
+                "https://huyenchip.com/2019/05/12/top-8-trends-from-iclr-2019.html",
+                "https://huyenchip.com/2019/03/11/silicon-valley-misogyny.html",
+                "https://huyenchip.com/2018/11/16/building-meaningful-relationships.html",
+                "https://huyenchip.com/2018/10/08/career-advice-recent-cs-graduates.html",
+                "https://huyenchip.com/2018/10/04/sotawhat.html",
+                "https://huyenchip.com/2018/03/30/guide-to-Artificial-Intelligence-Stanford.html",
+                "https://huyenchip.com/2017/07/28/confession.html",
+            ]
+        )
+    )
