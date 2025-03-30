@@ -1,19 +1,19 @@
 import json
-import re
-import time
 import logging
+import re
 import threading
-from datetime import datetime
+import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from functools import wraps
-from typing import List, Dict, Optional, Tuple, Set, Pattern
 from dataclasses import dataclass, field
+from datetime import datetime
+from functools import wraps
+from typing import List, Dict, Optional, Tuple, Set
+
+import requests
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
 from newsplease import NewsPlease
-from newsplease.crawler.simple_crawler import SimpleCrawler
-import requests
-import urllib.parse
 
 
 @dataclass
@@ -397,7 +397,6 @@ def fetch_single_article(url: str) -> Dict[str, str]:
 
         # Clean HTML content
         cleaned_html = clean_html(raw_html)
-        result["html"] = cleaned_html
 
         # First parsing attempt: Use NewsPlease
         try:
@@ -451,8 +450,8 @@ def fetch_single_article(url: str) -> Dict[str, str]:
         # If we got here with no content, update error message
         if not result["content"]:
             logger.error("Failed to extract content with both parsing methods")
+            result["html"] = cleaned_html
             result["content"] = "Failed to extract article content"
-
         return result
 
     except Exception as e:
